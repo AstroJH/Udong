@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# pytest / tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Docs build artifacts
+docs/_build/
+
+# Local
+venv/
+.venv/
+.vscode/
+.DS_Store
+
+# Large data files (never commit)
+*.fits
+*.fits.gz
+
+inbox/

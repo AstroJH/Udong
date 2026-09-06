@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "udong"
+version = "0.1.0"
+description = "Long-term scientific computing infrastructure for SDSS-IV MaNGA data science and AGN/galaxy research."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "GPL-3.0-or-later" }
+license-files = ["LICENSE"]
+keywords = ["astronomy", "MaNGA", "IFU", "spectroscopy", "AGN", "galaxies"]
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "astropy>=6.0",
+    "specutils>=1.13",
+    "matplotlib>=3.8",
+    "pandas>=2.2",
+    "PyYAML>=6.0",
+    "requests>=2.31",
+    "tqdm>=4.66",
+    "reproject>=0.14",
+    "ppxf>=9.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+]
+notebooks = [
+    "ipython>=8",
+    "jupyterlab>=4",
+    "ipykernel>=6",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/udong"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra --strict-markers -p no:cacheprovider"
+markers = [
+    "realdata: tests that require real MaNGA data files (skipped unless --run-realdata)",
+]
