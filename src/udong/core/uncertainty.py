@@ -5,7 +5,7 @@ Convention
 All survey products store errors as *inverse variance* (IVAR); ``IVAR <= 0``
 means the value is invalid (should be masked).  This module provides
 conversions between representations and a small set of analytic propagation
-primitives.  Monte-Carlo / bootstrap propagation is planned for Phase 2 but
+primitives.  Monte-Carlo / bootstrap propagation is planned for later phase but
 ``propagate()`` already fixes the interface.
 """
 
@@ -295,6 +295,6 @@ def propagate(func, *inputs, method: str = "analytic", **kwargs):
     """
     if method != "analytic":
         raise NotImplementedError(
-            f"propagation method {method!r} is planned for Phase 2"
+            f"propagation method {method!r} is planned for later phase"
         )
     return func(*inputs, **kwargs)
