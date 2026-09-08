@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import matplotlib.pyplot as plt
 import numpy as np
+from astropy import units as u
 from astropy.visualization.wcsaxes import WCSAxes
 
 from udong.core.map import Map2D
@@ -99,13 +100,17 @@ def plot_profile(profile: RadialProfile, ax=None, **kwargs):
 
     if ax is None:
         _, ax = plt.subplots()
-    r = profile.radius.to_value("arcsec")
+    # radius may be arcsec, kpc or dimensionless (R/Re); keep its own unit
+    r = np.asarray(profile.radius.value)
     v = np.asarray(profile.value.value)
     if profile.uncertainty is not None:
         e = np.asarray(profile.uncertainty.to_value(profile.value.unit))
         ax.errorbar(r, v, yerr=e, fmt="o", **kwargs)
     else:
         ax.plot(r, v, "o", **kwargs)
-    ax.set_xlabel("radius [arcsec]")
+    if profile.radius.unit == u.dimensionless_unscaled:
+        ax.set_xlabel("R / Re")
+    else:
+        ax.set_xlabel(f"radius [{profile.radius.unit:latex_inline}]")
     ax.set_ylabel(f"{profile.value.unit:latex_inline}")
     return ax

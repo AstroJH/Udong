@@ -2,7 +2,7 @@
 
 x = log10([OI] 6300 / Ha)      y = log10([OIII] 5007 / Hb)
 
-Boundaries (explicit references; see also docs/guides/sii_bpt_and_whan.md):
+Boundaries:
 
 * Kewley et al. (2001, ApJ 556, 121), [OI] maximum-starburst line:
   ``y = 0.73 / (x + 0.59) + 1.33``.  Objects below it are star-forming.

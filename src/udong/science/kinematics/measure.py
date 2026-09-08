@@ -15,8 +15,7 @@ are tracer-agnostic (stellar or gas).  They implement the *measurement* layer:
   the velocity field (a first-order description of ordered rotation) plus a
   sky-frame position angle of the velocity gradient.
 
-Physical background is in ``docs/guides/kinematics.md``; masks are interpreted
-through each map's ``MaskDefs`` (DONOTUSE by default).
+Masks are interpreted through each map's ``MaskDefs`` (DONOTUSE by default).
 """
 
 from __future__ import annotations

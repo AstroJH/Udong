@@ -15,7 +15,7 @@ AGN, and splits AGN into strong (Seyfert-like) and weak (LINER-like):
 * ``EW(Ha) >= 6 A``           -> strong AGN (Seyfert-like).
 
 References: Cid Fernandes et al. 2010, MNRAS 403, 1036; 2011, MNRAS 413,
-1687.  Full derivation and motivation: docs/guides/sii_bpt_and_whan.md.
+1687.
 
 The equivalent width must be in the galaxy *rest frame*: the DAP GEW is
 measured on observed-frame spectra, so divide by ``(1 + z)``.

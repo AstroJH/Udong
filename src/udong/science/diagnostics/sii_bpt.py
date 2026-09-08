@@ -2,7 +2,7 @@
 
 x = log10([SII] 6716+6731 / Ha)      y = log10([OIII] 5007 / Hb)
 
-Boundaries (explicit references, see docs/guides/sii_bpt_and_whan.md):
+Boundaries:
 
 * Kewley et al. (2001, ApJ 556, 121), [SII] starburst line:
   ``y = 0.72 / (x - 0.32) + 1.30``.  Objects below it are star-forming.
