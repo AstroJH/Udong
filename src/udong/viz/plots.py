@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm, SymLogNorm
 import numpy as np
 from astropy import units as u
 from astropy.visualization.wcsaxes import WCSAxes
@@ -54,16 +55,69 @@ def _manual_sky_ticks(ax, wcs, ny: int, nx: int) -> None:
         ax.set_yticklabels([f"{c.dec.degree:.3f}" for c in coords])
 
 
-def plot_map(map2d: Map2D, ax=None, colorbar: bool = True, show_mask: bool = True,
-             vmin=None, vmax=None, cmap: str = "viridis", **kwargs):
-    """Plot a Map2D.  Uses WCSAxes when a WCS is available."""
+def _finite_values(data):
+    """Positive/negative finite unmasked values for norm limits."""
+    a = np.ma.asarray(data)
+    return a.compressed()
 
+
+def _log_norm(data, vmin, vmax):
+    vals = np.asarray(_finite_values(data), dtype=float)
+    pos = vals[np.isfinite(vals) & (vals > 0)]
+    if pos.size == 0:
+        raise ValueError(
+            "scale='log' needs positive data; pass vmin>0 or use scale='linear'/'symlog'"
+        )
+    lo = float(vmin) if vmin is not None and vmin > 0 else float(pos.min())
+    hi = float(vmax) if vmax is not None else float(pos.max())
+    return LogNorm(vmin=lo, vmax=hi)
+
+
+def _symlog_norm(data, vmin, vmax, linthresh):
+    vals = np.asarray(_finite_values(data), dtype=float)
+    vals = vals[np.isfinite(vals)]
+    if vals.size == 0:
+        raise ValueError("no finite data for scale='symlog'")
+    lo = float(vmin) if vmin is not None else float(vals.min())
+    hi = float(vmax) if vmax is not None else float(vals.max())
+    if linthresh is None:
+        linthresh = max(abs(lo), abs(hi)) / 100.0 or 1.0
+    return SymLogNorm(linthresh=float(linthresh), vmin=lo, vmax=hi)
+
+
+def plot_map(map2d: Map2D, ax=None, colorbar: bool = True, show_mask: bool = True,
+             vmin=None, vmax=None, cmap: str = "viridis", scale: str = "linear",
+             linthresh=None, **kwargs):
+    """Plot a Map2D (WCSAxes when a WCS is available).
+
+    Parameters
+    ----------
+    scale
+        Colour-scale of the colourbar: ``"linear"`` (default), ``"log"``
+        (requires positive data unless ``vmin`` is given) or ``"symlog"``
+        (for bipolar maps; ``linthresh`` sets the linear threshold).
+    linthresh
+        Linear threshold for ``scale="symlog"`` (defaults to a hundredth of
+        the data range).
+    vmin, vmax, cmap
+        Passed to the image normalisation (linear scale).
+    """
+    if scale not in ("linear", "log", "symlog"):
+        raise ValueError(f"unknown scale {scale!r}; use 'linear', 'log' or 'symlog'")
+    if "norm" in kwargs:
+        if scale != "linear":
+            raise ValueError("pass either scale= or norm=, not both")
     data = np.asarray(map2d.masked_value())
     if show_mask:
         data = np.ma.masked_where(map2d.bad, data)
 
-    # if ax is None:
-    #     _, ax = plt.subplots()
+    norm = kwargs.pop("norm", None)
+    if scale == "log":
+        if norm is None:
+            norm = _log_norm(data, vmin, vmax)
+    elif scale == "symlog":
+        if norm is None:
+            norm = _symlog_norm(data, vmin, vmax, linthresh)
 
     if ax is None:
         if map2d.wcs is not None:
@@ -73,7 +127,10 @@ def plot_map(map2d: Map2D, ax=None, colorbar: bool = True, show_mask: bool = Tru
             fig, ax = plt.subplots()
 
     if map2d.wcs is not None:
-        im = ax.imshow(data, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax, **kwargs)
+        im = ax.imshow(
+            data, origin="lower", cmap=cmap, norm=norm,
+            vmin=None if norm is not None else vmin,
+            vmax=None if norm is not None else vmax, **kwargs)
         if isinstance(ax, WCSAxes):
             # proper WCS axes: astropy draws RA/Dec world ticks itself
             ax.set_xlabel("RA")
@@ -85,7 +142,10 @@ def plot_map(map2d: Map2D, ax=None, colorbar: bool = True, show_mask: bool = Tru
             ax.set_xlabel("RA [deg]")
             ax.set_ylabel("Dec [deg]")
     else:
-        im = ax.imshow(data, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax, **kwargs)
+        im = ax.imshow(
+            data, origin="lower", cmap=cmap, norm=norm,
+            vmin=None if norm is not None else vmin,
+            vmax=None if norm is not None else vmax, **kwargs)
         ax.set_xlabel("x [pixel]")
         ax.set_ylabel("y [pixel]")
 
