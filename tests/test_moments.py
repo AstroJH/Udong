@@ -85,3 +85,78 @@ def test_moment_maps_synthetic():
     assert s.value.value[0, 0] < s.value.value[-1, 0]
     assert np.isclose(s.value.value[0, 0], 100.0, atol=8.0)
     assert np.isclose(s.value.value[-1, 0], 200.0, atol=12.0)
+
+
+def _anchored_cube(nwave=120, ny=3, nx=4):
+    """Small cube with a continuum + Gaussian line and line-free anchors."""
+    from astropy import units as u
+
+    from udong.core.cube import Cube
+
+    wave = np.linspace(6500.0, 6620.0, nwave) * u.AA
+    unit = u.Unit("1e-17 erg/(s cm2 AA)")
+    flux = np.zeros((nwave, ny, nx))
+    for y in range(ny):
+        for x in range(nx):
+            line = gaussian_line(wave, 5.0 * 1e-17 * u.erg / (u.s * u.cm**2),
+                                 v=60.0 * (x - 1.5), sigma=90.0 + 20.0 * y)
+            flux[:, y, x] = line.to_value(unit) + 2.0  # unit = 1e-17 erg/(s cm2 AA)
+    return Cube(
+        flux=flux * unit,
+        ivar=np.full((nwave, ny, nx), 100.0),
+        wavelength=wave,
+    )
+
+
+def test_moment_maps_matches_per_spaxel_reference():
+    """The vectorised implementation must match the old per-spaxel maths."""
+    from astropy import units as u
+
+    cube = _anchored_cube()
+    wave = cube.wavelength
+    wlo, whi = 6540 * u.AA, 6590 * u.AA
+    blue = (6500 * u.AA, 6525 * u.AA)
+    red = (6600 * u.AA, 6620 * u.AA)
+
+    m0, m1, m2 = moment_maps(cube, wlo, whi, HA, blue=blue, red=red)
+
+    win = (wave >= wlo) & (wave <= whi)
+    ref0 = np.full((cube.ny, cube.nx), np.nan)
+    ref1 = np.full_like(ref0, np.nan)
+    ref2 = np.full_like(ref0, np.nan)
+    for y in range(cube.ny):
+        for x in range(cube.nx):
+            fl = Quantity(cube.flux.value[:, y, x], cube.flux.unit)
+            sub = Quantity(
+                subtract_linear_continuum(wave, fl, blue, red, wlo, whi),
+                cube.flux.unit,
+            )
+            a, v, s = line_moments(wave[win], sub, HA, valid=np.ones(win.sum(), bool))
+            ref0[y, x], ref1[y, x], ref2[y, x] = a.value, v.value, s.value
+
+    assert np.allclose(m0.value.value, ref0, rtol=1e-6, atol=1e-9)
+    assert np.allclose(m1.value.value, ref1, rtol=1e-6, atol=1e-6)
+    assert np.allclose(m2.value.value, ref2, rtol=1e-6, atol=1e-6)
+
+
+def test_moment_maps_marks_invalid_spaxels():
+    """NaN / ivar<=0 / masked spaxels inside the window become bad."""
+    from astropy import units as u
+
+    cube = _anchored_cube(nwave=60, ny=2, nx=3)
+    wave = cube.wavelength
+    wlo, whi = 6550 * u.AA, 6580 * u.AA
+    win = (wave >= wlo) & (wave <= whi)
+
+    flux = cube.flux.value.copy()
+    flux[win, 0, 0] = np.nan                    # not finite
+    ivar = cube.ivar.copy()
+    ivar[win, 0, 1] = 0.0                       # invalid inverse variance
+    mask = np.zeros(flux.shape, dtype=np.int32)
+    mask[win, 0, 2] = 1                         # masked bit
+
+    dirty = Cube(flux=flux * cube.flux.unit, ivar=ivar, mask=mask,
+                 wavelength=wave)
+    _, m1, _ = moment_maps(dirty, wlo, whi, HA)
+    assert m1.bad[0, 0] and m1.bad[0, 1] and m1.bad[0, 2]
+    assert not m1.bad[1, 0]

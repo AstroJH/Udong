@@ -163,71 +163,130 @@ def moment_maps(
     blue: tuple[Quantity, Quantity] | None = None,
     red: tuple[Quantity, Quantity] | None = None,
     min_valid: int = 5,
+    block: int = 50_000,
 ) -> tuple[Map2D, Map2D, Map2D]:
     """Compute M0/M1/M2 maps from a datacube over ``[wlo, whi]``.
 
-    ``blue``/``red`` are optional line-free anchor bands for linear continuum
-    subtraction (recommended).  Returns (M0, M1, M2) as ``Map2D`` with units
-    of flux, km/s and km/s; spaxels with too few valid pixels are masked.
+    The computation is **vectorised over spaxels in blocks** (``block``
+    spaxels per chunk): the window channels, trapezoid weights and velocity
+    axis are precomputed once, and the linear continuum (``blue``/``red``
+    anchor bands) is evaluated for all spaxels of a block at once.  This
+    replaces the previous per-spaxel Python loop, which processed the full
+    wavelength axis for every spaxel.
+
+    Parameters
+    ----------
+    blue, red
+        Optional line-free anchor bands for linear continuum subtraction
+        (recommended); each is ``(lo, hi)`` in observed wavelength.
+    min_valid
+        Minimum number of valid (finite flux, ``ivar > 0``, unmasked) pixels
+        **inside the moment window** required for a spaxel to be measured.
+    block
+        Number of spaxels per vectorised chunk (memory control; lower it for
+        very large windows/cubes).
+
+    Returns
+    -------
+    (M0, M1, M2)
+        ``Map2D`` with units of flux, km/s and km/s; spaxels with too few
+        valid pixels are masked.
     """
     if cube.wavelength is None:
         raise ValueError("cube needs a wavelength vector")
+    if block < 1:
+        raise ValueError("block must be >= 1")
+
     wave_all = Quantity(cube.wavelength).to(u.AA).value
+    flux2 = np.asarray(cube.flux.value, dtype=float).reshape(wave_all.size, -1)
     ivar = cube.ivar
     cube_mask = cube.mask
+    ivar2 = None if ivar is None else np.asarray(ivar, dtype=float).reshape(wave_all.size, -1)
+    mask2 = None if cube_mask is None else np.asarray(cube_mask).reshape(wave_all.size, -1)
 
     lo = Quantity(wlo).to(u.AA).value
     hi = Quantity(whi).to(u.AA).value
-    win = (wave_all >= lo) & (wave_all <= hi)
-    idx = np.nonzero(win)[0]
-    if len(idx) < min_valid:
+    win_idx = np.nonzero((wave_all >= lo) & (wave_all <= hi))[0]
+    if win_idx.size < min_valid:
         raise ValueError("moment window contains too few spectral pixels")
+    wave_win = wave_all[win_idx]
 
-    def good_pix(x: int, y: int) -> np.ndarray:
-        g = np.isfinite(np.asarray(cube.flux.value[:, y, x]))
-        if ivar is not None:
-            g &= np.asarray(ivar[:, y, x]) > 0
-        if cube_mask is not None:
+    # trapezoid channel widths and fixed velocity axis (identical per spaxel)
+    dlam = np.zeros_like(wave_win)
+    if wave_win.size > 1:
+        dlam[1:-1] = 0.5 * (wave_win[2:] - wave_win[:-2])
+        dlam[0] = wave_win[1] - wave_win[0]
+        dlam[-1] = wave_win[-1] - wave_win[-2]
+    rest_aa = float(Quantity(rest_wavelength).to_value(u.AA))
+    v_axis = _C_KMPS * (wave_win - rest_aa) / rest_aa
+
+    have_anchors = blue is not None and red is not None
+    if have_anchors:
+        b_lo, b_hi = (Quantity(b).to_value(u.AA) for b in blue)
+        r_lo, r_hi = (Quantity(r).to_value(u.AA) for r in red)
+        bidx = np.nonzero((wave_all >= b_lo) & (wave_all <= b_hi))[0]
+        ridx = np.nonzero((wave_all >= r_lo) & (wave_all <= r_hi))[0]
+        if bidx.size < 2 or ridx.size < 2:
+            raise ValueError("continuum anchor bands contain too few pixels")
+        xb = float(np.median(wave_all[bidx]))
+        xr = float(np.median(wave_all[ridx]))
+        if xr == xb:
+            raise ValueError("continuum anchor bands overlap")
+
+    def _good(f, v, m):
+        g = np.isfinite(f)
+        if v is not None:
+            g &= v > 0
+        if m is not None:
             if cube.mask_defs is not None:
-                g &= ~cube.mask_defs.unmask(cube_mask[:, y, x])
+                g &= ~cube.mask_defs.unmask(m)
             else:
-                g &= cube_mask[:, y, x] == 0
+                g &= m == 0
         return g
 
-    ny, nx = cube.ny, cube.nx
-    m0 = np.full((ny, nx), np.nan)
-    m1 = np.full((ny, nx), np.nan)
-    m2 = np.full((ny, nx), np.nan)
-    bad = np.zeros((ny, nx), dtype=bool)
+    nspax = flux2.shape[1]
+    m0 = np.full(nspax, np.nan)
+    m1 = np.full(nspax, np.nan)
+    m2 = np.full(nspax, np.nan)
 
-    wave_win = Quantity(wave_all[win], u.AA)
-    rest = Quantity(rest_wavelength)
-    for y in range(ny):
-        for x in range(nx):
-            fl = Quantity(np.asarray(cube.flux.value[:, y, x]), cube.flux.unit)
-            good = good_pix(x, y)
-            if good.sum() < min_valid or not good[win].any():
-                bad[y, x] = True
-                continue
-            if blue is not None and red is not None:
-                try:
-                    sub = Quantity(
-                        subtract_linear_continuum(
-                            Quantity(wave_all, u.AA), fl, blue, red, wlo, whi
-                        ),
-                        cube.flux.unit,
-                    )
-                except ValueError:
-                    bad[y, x] = True
-                    continue
-            else:
-                sub = fl[win]
-            gwin = good[win]
-            a, vv, ss = line_moments(wave_win, sub, rest, valid=gwin)
-            if np.isfinite(a.value) and np.isfinite(vv.value):
-                m0[y, x], m1[y, x], m2[y, x] = a.value, vv.value, ss.value
-            else:
-                bad[y, x] = True
+    for start in range(0, nspax, block):
+        sl = slice(start, min(start + block, nspax))
+        fw = flux2[win_idx, sl]
+        gw = _good(fw, None if ivar2 is None else ivar2[win_idx, sl],
+                   None if mask2 is None else mask2[win_idx, sl])
+
+        if have_anchors:
+            fb, fr = flux2[bidx, sl], flux2[ridx, sl]
+            gb = _good(fb, None if ivar2 is None else ivar2[bidx, sl],
+                       None if mask2 is None else mask2[bidx, sl])
+            gr = _good(fr, None if ivar2 is None else ivar2[ridx, sl],
+                       None if mask2 is None else mask2[ridx, sl])
+            with np.errstate(all="ignore"):
+                yb = np.ma.median(np.ma.masked_where(~gb, fb), axis=0).filled(np.nan)
+                yr = np.ma.median(np.ma.masked_where(~gr, fr), axis=0).filled(np.nan)
+            slope = (yr - yb) / (xr - xb)
+            sub = fw - (yb + slope * (wave_win[:, None] - xb))
+        else:
+            sub = fw
+
+        weights = np.where(gw, sub * dlam[:, None], 0.0)
+        with np.errstate(all="ignore"):
+            m0b = np.sum(weights, axis=0)
+            m1b = np.sum(weights * v_axis[:, None], axis=0) / m0b
+            m2b = np.sqrt(np.maximum(
+                np.sum(weights * (v_axis[:, None] - m1b) ** 2, axis=0) / m0b, 0.0
+            ))
+        nvalid = gw.sum(axis=0)
+        ok = (nvalid >= min_valid) & np.isfinite(m0b) & (m0b > 0) & np.isfinite(m1b)
+        m0[start:sl.stop] = np.where(ok, m0b, np.nan)
+        m1[start:sl.stop] = np.where(ok, m1b, np.nan)
+        m2[start:sl.stop] = np.where(ok, m2b, np.nan)
+
+    ny, nx = cube.ny, cube.nx
+    m0 = m0.reshape(ny, nx)
+    m1 = m1.reshape(ny, nx)
+    m2 = m2.reshape(ny, nx)
+    bad = ~np.isfinite(m1)
 
     flux_unit = cube.flux.unit * u.AA
     wcs = cube.spatial_wcs
