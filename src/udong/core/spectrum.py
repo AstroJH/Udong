@@ -130,6 +130,59 @@ class Spectrum:
         self._spectral_axis = Quantity(spectral_axis)
 
     # ------------------------------------------------------------------ #
+    # wavelength reference frame
+    # ------------------------------------------------------------------ #
+    @property
+    def wavelength_frame(self) -> str | None:
+        """Wavelength reference frame from ``meta``: ``"air"`` or ``"vacuum"``."""
+        f = self._meta.get("wavelength_frame")
+        return None if f is None else str(f)
+
+    def to_vacuum(self) -> "Spectrum":
+        """Return a copy whose wavelength axis is in the **vacuum** frame.
+
+        No-op when the spectrum is already vacuum (or the frame is unknown).
+        Use this before comparing against vacuum rest wavelengths (the Udong
+        emission-line catalogues are vacuum).  Records a provenance step.
+        """
+        return self._with_frame("vacuum")
+
+    def to_air(self) -> "Spectrum":
+        """Return a copy whose wavelength axis is in the **air** frame."""
+        return self._with_frame("air")
+
+    def _with_frame(self, frame: str) -> "Spectrum":
+        current = self.wavelength_frame
+        if current == frame or current is None:
+            return self
+        from udong.core.provenance import ProcessingStep
+        from udong.core.wavelength import air_to_vacuum, vacuum_to_air
+        from dataclasses import replace
+
+        if frame == "vacuum":
+            axis = air_to_vacuum(self._spectral_axis)
+            op = "air_to_vacuum"
+        else:
+            axis = vacuum_to_air(self._spectral_axis)
+            op = "vacuum_to_air"
+        meta = dict(self._meta)
+        meta["wavelength_frame"] = frame
+        prov = self._provenance
+        if prov is not None:
+            step = ProcessingStep(name=op, params={"frame_from": current, "frame_to": frame})
+            prov = replace(prov, steps=list(prov.steps) + [step])
+        return Spectrum(
+            flux=self.flux,
+            spectral_axis=axis,
+            uncertainty=self._uncertainty,
+            mask=self._mask,
+            meta=meta,
+            provenance=prov,
+            mask_defs=self._mask_defs,
+            redshift=self._redshift,
+        )
+
+    # ------------------------------------------------------------------ #
     @property
     def specutils_spectrum(self):
         """The underlying specutils spectrum object (advanced use).
