@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import Literal
 
@@ -14,6 +15,9 @@ from astropy.units import Quantity
 
 from .locator import DAPTYPES, MangaPath
 from .products import MangaCube, MangaMaps
+from .archive import manga_archive
+from udong.data.net import progress_enabled
+
 from .downloader import download_file, gzip_ok
 from .reader import read_cube, read_dapall, read_drpall, read_maps
 
@@ -63,6 +67,7 @@ class MangaDataset:
         self._drpall: Table | None = None
         self._dapall: Table | None = None
         self._mask_cache: dict[str, object] = {}
+        self._archives: dict[tuple[str, str | None], object] = {}
 
     # ------------------------------------------------------------------ #
     def _resolve(
@@ -111,6 +116,79 @@ class MangaDataset:
         return md
 
     # ------------------------------------------------------------------ #
+    # easycat archive plumbing (product URLs + single-target downloads)
+    # ------------------------------------------------------------------ #
+    def _archive(self, product: str, dap: str | None = None):
+        """Cached easycat SDSSArchive for a MaNGA product."""
+        key = (product, dap)
+        if key not in self._archives:
+            self._archives[key] = manga_archive(
+                release=self.release, drpver=self.drpver, dapver=self.dapver,
+                product=product, dap=dap,
+            )
+        return self._archives[key]
+
+    def _product_url(self, product: str, dap: str | None, plateifu: str,
+                     local: Path) -> str:
+        """Planned URL for a product (no download, no side effects)."""
+        try:
+            item = self._archive(product, dap).fetch_one(
+                plateifu, dest=local, download=False
+            )
+        except Exception:
+            return ""
+        return str((getattr(item, "meta", {}) or {}).get("url", ""))
+
+    def _resolve_product(self, local: Path, plateifu: str, product: str,
+                         dap: str | None, download: bool) -> Path:
+        """Locate or download one MaNGA product, keeping Udong's local layout.
+
+        The transfer is delegated to easycat's ``SurveyArchive.fetch_one``
+        (atomic ``.part`` download, size + gzip verification, progress), while
+        ``dest=`` keeps our SAS-mirrored path and ``ItemResult.meta`` supplies
+        the URL for error messages.
+        """
+        local = Path(local)
+        if local.exists():
+            if local.suffix != ".gz" or gzip_ok(local):
+                return local
+            if not download or not self.allow_download:
+                raise FileNotFoundError(
+                    f"existing file is truncated/corrupt: {local}\n"
+                    f"  (url: {self._product_url(product, dap, plateifu, local)}) - "
+                    "delete the file or enable download to re-fetch it"
+                )
+
+        if not download or not self.allow_download:
+            raise FileNotFoundError(
+                f"expected file not found: {local}\n"
+                f"  (url: {self._product_url(product, dap, plateifu, local)}) - "
+                "set allow_download=True or place the file there"
+            )
+
+        local.parent.mkdir(parents=True, exist_ok=True)
+        sys.stderr.write(f"[udong] downloading {local.name}\n")
+        sys.stderr.write(f"         -> {local}\n")
+        item = self._archive(product, dap).fetch_one(
+            plateifu,
+            dest=local,
+            download=True,
+            progress=progress_enabled(),
+            validate="gzip" if local.suffix == ".gz" else None,
+        )
+        if not getattr(item, "success", False):
+            raise OSError(
+                f"download failed for {plateifu} ({product}): "
+                f"{getattr(item, 'error', '') or 'unknown error'}"
+            )
+        if getattr(item, "data", None) is None:
+            url = (getattr(item, "meta", {}) or {}).get("url", "")
+            raise FileNotFoundError(
+                f"no {product} product for {plateifu} in the archive\n  (url: {url})"
+            )
+        return local
+
+    # ------------------------------------------------------------------ #
     def load_cube(
         self,
         plateifu: str,
@@ -119,7 +197,7 @@ class MangaDataset:
     ) -> MangaCube:
         """Load a DRP datacube for ``plateifu`` (e.g. ``"8485-1901"``)."""
         local = self.paths.cube_local(plateifu, wave)
-        path = self._resolve(local, self.paths.cube_url(plateifu, wave), download)
+        path = self._resolve_product(local, plateifu, f"{wave}CUBE", None, download)
         return read_cube(path, mask_defs=self._mask_defs("MANGA_DRP3PIXMASK"),
                          release=self.release)
 
@@ -132,7 +210,7 @@ class MangaDataset:
         """Load DAP MAPS for ``plateifu`` (default DAPTYPE if not given)."""
         daptype = daptype or self.default_daptype
         local = self.paths.maps_local(plateifu, daptype)
-        path = self._resolve(local, self.paths.maps_url(plateifu, daptype), download)
+        path = self._resolve_product(local, plateifu, "MAPS", daptype, download)
         return read_maps(path, mask_defs=self._mask_defs("MANGA_DAPPIXMASK"),
                          release=self.release)
 

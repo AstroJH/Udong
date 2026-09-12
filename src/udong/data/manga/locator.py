@@ -6,6 +6,11 @@ Mirrors the official Science Archive Server layout (validated against DR17):
 * DAP products:  ``manga/spectro/analysis/{drpver}/{dapver}/{daptype}/{plate}/{ifu}/manga-{plate}-{ifu}-MAPS-{daptype}.fits.gz``
 * drpall:        ``manga/spectro/redux/{drpver}/drpall-{drpver}.fits``
 * dapall:        ``manga/spectro/analysis/{drpver}/{dapver}/dapall-{drpver}-{dapver}.fits``
+
+Product URLs for cubes/RSS/MAPS are delegated to easycat's
+``SDSSArchive(mode="manga").manga_url()`` so the SAS layout and supported
+products stay in one place (with a local fallback when easycat is not
+installed).  The local-layout helpers below remain Udong's own convention.
 """
 
 from __future__ import annotations
@@ -60,22 +65,11 @@ class MangaPath:
         return self._rel("manga", "spectro", "redux", self.drpver, plate, "stack",
                          f"manga-{plate}-{ifu}-{wave}CUBE.fits.gz")
 
-    def rss_rel(self, plateifu: str, wave: Literal["LOG", "LIN"] = "LOG") -> Path:
-        plate, ifu = parse_plateifu(plateifu)
-        return self._rel("manga", "spectro", "redux", self.drpver, plate, "stack",
-                         f"manga-{plate}-{ifu}-{wave}RSS.fits.gz")
-
     def maps_rel(self, plateifu: str, daptype: str) -> Path:
         plate, ifu = parse_plateifu(plateifu)
         return self._rel("manga", "spectro", "analysis", self.drpver, self.dapver,
                          daptype, plate, ifu,
                          f"manga-{plate}-{ifu}-MAPS-{daptype}.fits.gz")
-
-    def model_cube_rel(self, plateifu: str, daptype: str) -> Path:
-        plate, ifu = parse_plateifu(plateifu)
-        return self._rel("manga", "spectro", "analysis", self.drpver, self.dapver,
-                         daptype, plate, ifu,
-                         f"manga-{plate}-{ifu}-LOGCUBE-{daptype}.fits.gz")
 
     def drpall_rel(self) -> Path:
         return self._rel("manga", "spectro", "redux", self.drpver, f"drpall-{self.drpver}.fits")
@@ -88,14 +82,8 @@ class MangaPath:
     def cube_local(self, plateifu: str, wave: Literal["LOG", "LIN"] = "LOG") -> Path:
         return self._local(*self.cube_rel(plateifu, wave).parts)
 
-    def rss_local(self, plateifu: str, wave: Literal["LOG", "LIN"] = "LOG") -> Path:
-        return self._local(*self.rss_rel(plateifu, wave).parts)
-
     def maps_local(self, plateifu: str, daptype: str) -> Path:
         return self._local(*self.maps_rel(plateifu, daptype).parts)
-
-    def model_cube_local(self, plateifu: str, daptype: str) -> Path:
-        return self._local(*self.model_cube_rel(plateifu, daptype).parts)
 
     def drpall_local(self) -> Path:
         return self._local(*self.drpall_rel().parts)
@@ -104,17 +92,28 @@ class MangaPath:
         return self._local(*self.dapall_rel().parts)
 
     # ------------------------------------------------------------------ #
-    def cube_url(self, plateifu: str, wave: Literal["LOG", "LIN"] = "LOG") -> str:
-        return self._url(*self.cube_rel(plateifu, wave).parts)
+    # remote URLs (delegated to easycat's SDSSArchive when available)
+    # ------------------------------------------------------------------ #
+    def _manga_archive(self, product: str, dap: str | None = None):
+        """easycat ``SDSSArchive`` configured for this release/product."""
+        from udong.data.manga.archive import manga_archive
 
-    def rss_url(self, plateifu: str, wave: Literal["LOG", "LIN"] = "LOG") -> str:
-        return self._url(*self.rss_rel(plateifu, wave).parts)
+        return manga_archive(
+            release=self.release, drpver=self.drpver, dapver=self.dapver,
+            product=product, dap=dap,
+        )
+
+    def _manga_url(self, plateifu: str, product: str, dap: str | None = None) -> str:
+        """SAS product URL from easycat's ``SDSSArchive.manga_url``."""
+        plate, ifu = parse_plateifu(plateifu)
+        return self._manga_archive(product, dap).manga_url(int(plate), int(ifu))
+
+    # ------------------------------------------------------------------ #
+    def cube_url(self, plateifu: str, wave: Literal["LOG", "LIN"] = "LOG") -> str:
+        return self._manga_url(plateifu, f"{wave}CUBE")
 
     def maps_url(self, plateifu: str, daptype: str) -> str:
-        return self._url(*self.maps_rel(plateifu, daptype).parts)
-
-    def model_cube_url(self, plateifu: str, daptype: str) -> str:
-        return self._url(*self.model_cube_rel(plateifu, daptype).parts)
+        return self._manga_url(plateifu, "MAPS", dap=daptype)
 
     def drpall_url(self) -> str:
         return self._url(*self.drpall_rel().parts)

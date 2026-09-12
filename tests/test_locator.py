@@ -24,3 +24,35 @@ def test_paths(tmp_path):
         "https://data.sdss.org/sas/dr17/manga/spectro/redux/v3_1_1/8485/stack/"
         "manga-8485-1901-LOGCUBE.fits.gz"
     )
+
+
+def test_urls_match_easycat_archive():
+    """Phase A: product URLs are delegated to easycat's SDSSArchive."""
+    from easycat.download import SDSSArchive
+
+    mp = MangaPath("/tmp/root", release="dr17", drpver="v3_1_1", dapver="3.1.0")
+
+    drp = SDSSArchive(mode="manga", manga_product="LOGCUBE",
+                      manga_sas="https://data.sdss.org/sas/dr17")
+    dap = SDSSArchive(mode="manga", manga_product="MAPS",
+                      manga_dap="HYB10-MILESHC-MASTARSSP",
+                      manga_sas="https://data.sdss.org/sas/dr17")
+
+    assert mp.cube_url("8485-1901") == drp.manga_url(8485, 1901)
+    assert mp.cube_url("8485-1901", wave="LIN") == SDSSArchive(
+        mode="manga", manga_product="LINCUBE",
+        manga_sas="https://data.sdss.org/sas/dr17").manga_url(8485, 1901)
+    assert mp.maps_url("8485-1901", "HYB10-MILESHC-MASTARSSP") == dap.manga_url(8485, 1901)
+
+
+def test_urls_actually_delegated_to_easycat(monkeypatch):
+    """If easycat answers, its URL is used verbatim (no local template)."""
+    from easycat.download import SDSSArchive
+
+    monkeypatch.setattr(SDSSArchive, "manga_url",
+                        lambda self, plate, ifu: f"https://example.invalid/{plate}-{ifu}")
+    mp = MangaPath("/tmp/root")
+    assert mp.cube_url("8485-1901") == "https://example.invalid/8485-1901"
+    assert mp.maps_url("8485-1901", "HYB10-MILESHC-MASTARSSP") == (
+        "https://example.invalid/8485-1901"
+    )

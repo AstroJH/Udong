@@ -23,7 +23,7 @@ Layering
   (``udong.data.manga.continuum.make_manga_templates``).  The data layer
   therefore never imports this module -- cross-layer orchestration happens
   in pipelines/examples, which import both sides.
-* ``fit_manga_spaxel`` / ``MangaContinuumResult`` are deprecated aliases of
+* generic per-spaxel entry point for any core ``Cube`` (MaNGA or MUSE):
   :func:`fit_cube_spaxel` / :class:`SpaxelContinuumResult`, kept so notebooks
   written before the data/science split keep working with an import-path-only
   change.

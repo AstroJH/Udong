@@ -31,6 +31,69 @@ def _populate_root(tmp_path, fake_cube_file, fake_maps_file, fake_drpall_file):
     return root
 
 
+class _FakeArchive:
+    """Fake easycat SDSSArchive recording fetch_one calls."""
+
+    def __init__(self, url="https://example.invalid/manga.fits.gz", write=None):
+        self.url = url
+        self.write = write
+        self.calls = []
+
+    def fetch_one(self, target, *, dest=None, download=False, **kwargs):
+        from easycat.download import ItemResult
+
+        self.calls.append({"target": target, "dest": dest, "download": download, **kwargs})
+        if not download:
+            return ItemResult(obj_id=str(target), success=True, data=None,
+                              meta={"url": self.url})
+        if self.write is not None:
+            self.write(dest)
+        return ItemResult(obj_id=str(target), success=True, data=dest,
+                          meta={"url": self.url, "dest": str(dest)})
+
+
+def test_download_delegates_to_easycat_fetch_one(tmp_path, fake_cube_file, monkeypatch):
+    import gzip
+
+    root = tmp_path / "manga"
+    fake = _FakeArchive()
+
+    def write(dest):
+        Path(dest).parent.mkdir(parents=True, exist_ok=True)
+        with open(fake_cube_file, "rb") as f:
+            with gzip.open(dest, "wb") as g:
+                g.write(f.read())
+
+    fake.write = write
+    monkeypatch.setattr("udong.data.manga.dataset.manga_archive", lambda **kw: fake)
+    monkeypatch.setenv("UDONG_MASKPAR", str(tmp_path / "mask.par"))
+    Path(tmp_path / "mask.par").write_text(
+        'masktype MANGA_DRP3PIXMASK 32 "DRP3 pixel mask"\n'
+        'maskbits MANGA_DRP3PIXMASK 10 DONOTUSE "do not use"\n'
+    )
+
+    manga = MangaDataset(root=root, allow_download=True)
+    cube = manga.load_cube("8485-1901")
+    assert cube.plateifu == "8485-1901"
+
+    call = fake.calls[0]
+    assert call["target"] == "8485-1901"
+    assert call["download"] is True
+    assert call["validate"] == "gzip"
+    # Udong keeps its own (SAS-mirrored) layout via dest=
+    assert Path(call["dest"]) == root / (
+        "dr17/manga/spectro/redux/v3_1_1/8485/stack/manga-8485-1901-LOGCUBE.fits.gz"
+    )
+
+
+def test_missing_file_error_includes_archive_url(tmp_path, monkeypatch):
+    fake = _FakeArchive(url="https://example.invalid/planned-url.fits.gz")
+    monkeypatch.setattr("udong.data.manga.dataset.manga_archive", lambda **kw: fake)
+    manga = MangaDataset(root=tmp_path / "empty", allow_download=False)
+    with pytest.raises(FileNotFoundError, match="planned-url"):
+        manga.load_cube("8485-1901")
+
+
 def test_load_cube_and_maps(tmp_path, fake_cube_file, fake_maps_file, fake_drpall_file):
     root = _populate_root(tmp_path, fake_cube_file, fake_maps_file, fake_drpall_file)
     manga = MangaDataset(root=root, allow_download=False)
@@ -62,7 +125,7 @@ def test_default_root_uses_repository(tmp_path, monkeypatch):
 
 
 def test_truncated_local_file_redownloaded(tmp_path, fake_cube_file, monkeypatch):
-    """A truncated .gz file must be detected and re-fetched, not read as-is."""
+    """A truncated .gz file must be detected and re-fetched via easycat."""
     import gzip
 
     root = tmp_path / "manga"
@@ -72,21 +135,17 @@ def test_truncated_local_file_redownloaded(tmp_path, fake_cube_file, monkeypatch
         raw = gzip.compress(f.read())
     dst.write_bytes(raw[: len(raw) // 2])  # truncate
 
-    calls = {}
-
-    def fake_download(url, local, **kwargs):
-        calls["url"] = url
+    def write(dest):
+        Path(dest).parent.mkdir(parents=True, exist_ok=True)
         with open(fake_cube_file, "rb") as f:
-            import gzip as _gz
-
-            with _gz.open(local, "wb") as g:
+            with gzip.open(dest, "wb") as g:
                 g.write(f.read())
-        return local
 
-    monkeypatch.setattr("udong.data.manga.dataset.download_file", fake_download)
+    fake = _FakeArchive(url="https://data.sdss.org/sas/.../manga-8485-1901-LOGCUBE.fits.gz",
+                        write=write)
+    monkeypatch.setattr("udong.data.manga.dataset.manga_archive", lambda **kw: fake)
 
-    # Registry download must also stay hermetic: point it at a tmp cache file
-    # and stub the network call.
+    # Registry download must also stay hermetic: point it at a tmp cache file.
     mask_file = tmp_path / "maskbits" / "sdssMaskbits.par"
     monkeypatch.setenv("UDONG_MASKPAR", str(mask_file))
 
@@ -102,7 +161,8 @@ def test_truncated_local_file_redownloaded(tmp_path, fake_cube_file, monkeypatch
     manga = MangaDataset(root=root, allow_download=True)
     cube = manga.load_cube("8485-1901")
     assert cube.plateifu == "8485-1901"
-    assert "data.sdss.org" in calls["url"]
+    assert fake.calls[-1]["validate"] == "gzip"
+    assert "data.sdss.org" in fake.url
 
 
 def test_truncated_local_file_no_download_raises(tmp_path, fake_cube_file):
