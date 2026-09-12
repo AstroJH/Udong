@@ -1,11 +1,5 @@
-"""Data-access layer.
+"""Survey data access layer (MaNGA today, MUSE as of M1)."""
 
-``udong.data.base`` defines the survey-agnostic dataset interface (Protocol);
-``udong.data.manga`` contains everything specific to SDSS MaNGA products.
-"""
+from udong.data.base import CatalogDataset, IFUDataset
 
-from __future__ import annotations
-
-from udong.data.base import IFUDataset
-
-__all__ = ["IFUDataset"]
+__all__ = ["IFUDataset", "CatalogDataset"]

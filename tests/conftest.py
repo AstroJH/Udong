@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import warnings
 
 import numpy as np
 import pytest
@@ -10,6 +11,13 @@ from astropy.io import fits
 from astropy.table import Table
 
 os.environ.setdefault("MPLBACKEND", "Agg")
+# MUSE ESO keywords are stored as HIERARCH cards; silence the
+# benign 'greater than 8 characters' notice raised on assignment.
+warnings.filterwarnings(
+    "ignore",
+    message=r"Keyword name 'ESO .*' is greater than 8 characters.*",
+    category=Warning,
+)
 
 
 def wcs_cards(header, nx=8, ny=8, naxis=2, crval1=232.5447, crval2=48.690201,
@@ -185,3 +193,75 @@ def pytest_collection_modifyitems(config, items):
         for item in items:
             if "realdata" in item.keywords:
                 item.add_marker(skip)
+
+
+def make_muse_cube(path, nwave=40, ny=10, nx=12):
+    """Write a small MUSE-like ESO datacube (PRIMARY + DATA + STAT).
+
+    Mirrors the real file layout (see docs/guides/muse_golden_file_notes.md):
+    metadata on PRIMARY; DATA/STAT float32 extensions each carrying their own
+    3-D WCS (RA---TAN/DEC--TAN + AWAV); bad pixels encoded as NaN (no DQ ext).
+    """
+    rng = np.random.default_rng(7)
+    flux = (rng.random((nwave, ny, nx)) * 50.0 + 20.0).astype(np.float32)
+    var = np.full((nwave, ny, nx), 25.0, dtype=np.float32)
+    # bad pixels (NaN in both DATA and STAT, like the real product)
+    for bad in [(0, 0, 0), (1, 2, 3), (nwave - 1, 5, 5)]:
+        flux[bad] = np.nan
+        var[bad] = np.nan
+
+    prim = fits.PrimaryHDU()
+    h = prim.header
+    # ESO long keywords are written as HIERARCH cards; silence the astropy
+    # "greater than 8 characters" notice raised on assignment.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        h["ESO OBS TARG NAME"] = "Ton S 180"
+        h["ESO INS MODE"] = "WFM-AO-N"
+        h["ESO OBS PROG ID"] = "111.24SR.001"
+        h["ESO PRO CATG"] = "DATACUBE_DEEP"
+        h["ESO PRO REC3 PIPE ID"] = "muse/2.8.6"
+        h["NCOMBINE"] = 18
+        h["EXPTIME"] = 3909.62
+        h["SKY_RES"] = 1.1325
+        h["MJD-OBS"] = 60123.339
+        h["DATE-OBS"] = "2023-06-28T08:08:40.428"
+        h["WAVELMIN"] = 470.04
+        h["WAVELMAX"] = 935.16
+        h["SPEC_RES"] = 3014.65
+
+    def muse_wcs_cards(hd, naxis=3):
+        hd["CRPIX1"] = (nx + 1) / 2
+        hd["CRPIX2"] = (ny + 1) / 2
+        hd["CRVAL1"] = 14.334183
+        hd["CRVAL2"] = -22.38238
+        hd["CD1_1"] = -5.55555555555556e-05   # -0.2 arcsec
+        hd["CD2_2"] = 5.55555555555556e-05
+        hd["CTYPE1"] = "RA---TAN"
+        hd["CTYPE2"] = "DEC--TAN"
+        hd["CUNIT1"] = "deg"
+        hd["CUNIT2"] = "deg"
+        hd["RADESYS"] = "FK5"
+        hd["EQUINOX"] = 2000.0
+        if naxis >= 3:
+            hd["CRPIX3"] = 1.0
+            hd["CRVAL3"] = 4700.40576171875
+            hd["CD3_3"] = 1.25
+            hd["CTYPE3"] = "AWAV"
+            hd["CUNIT3"] = "angstrom"
+        return hd
+
+    data = fits.ImageHDU(flux, name="DATA")
+    data.header["BUNIT"] = "10**(-20)erg.s**(-1).cm**(-2).angstrom**(-1)"
+    muse_wcs_cards(data.header)
+    stat = fits.ImageHDU(var, name="STAT")
+    stat.header["BUNIT"] = "10**(-40)erg**2.s**(-2).cm**(-4).angstrom**(-2)"
+    muse_wcs_cards(stat.header)
+    fits.HDUList([prim, data, stat]).writeto(path, overwrite=True, output_verify="silentfix")
+
+
+@pytest.fixture
+def fake_muse_file(tmp_path):
+    p = tmp_path / "ADP.2024-04-30T18:20:44.624.fits"
+    make_muse_cube(p)
+    return p

@@ -15,8 +15,12 @@ from astropy import units as u
 from astropy.io import fits
 from astropy.table import Table
 from astropy.units import Quantity
-from astropy.wcs import WCS
 
+from udong.data.fitsutil import (
+    open_fits as _open_fits,
+    spatial_wcs as _spatial_wcs,
+    wcs_from_header as _wcs_from_header,
+)
 from udong.core.map import Map2D
 from udong.core.mask import MaskDefs
 from udong.core.provenance import Provenance
@@ -27,74 +31,6 @@ from udong.data.manga.downloader import gzip_ok
 from udong.data.manga.units import manga_unit
 
 __all__ = ["read_cube", "read_maps", "read_drpall", "read_dapall"]
-
-# -- WCS helpers ------------------------------------------------------------- #
-_WCS_KEY_PREFIXES = (
-    "WCSAXES", "CTYPE", "CRVAL", "CRPIX", "CD", "PC", "CDELT", "CUNIT",
-    "RADESYS", "EQUINOX", "NAXIS", "LONPOLE", "LATPOLE", "MJDREF",
-    "DATE-OBS", "MJD-OBS", "CROTA",
-)
-
-
-def _wcs_only_header(header: fits.Header, naxis: int) -> fits.Header:
-    """A copy of ``header`` containing only WCS-relevant keywords.
-
-    Passing a full survey header to ``WCS()`` produces spurious warnings
-    (e.g. ``PLATEID`` parsed as a string); filtering avoids that.
-    """
-    out = fits.Header()
-    for key, value in header.items():
-        if key.startswith(_WCS_KEY_PREFIXES):
-            out[key] = value
-    out["NAXIS"] = naxis
-    for i in range(1, naxis + 1):
-        nk = f"NAXIS{i}"
-        if nk in header:
-            out[nk] = header[nk]
-    return out
-
-
-def _wcs_from_header(header: fits.Header, naxis: int) -> WCS:
-    """Build a WCS from a FITS header, forcing ``naxis`` axes."""
-    try:
-        w = WCS(_wcs_only_header(header, naxis), naxis=naxis)
-        if w.pixel_n_dim == naxis:
-            return w
-    except Exception:
-        pass
-    # manual fallback (e.g. NAXIS=0 primary headers)
-    w = WCS(naxis=naxis)
-    for i in range(1, naxis + 1):
-        w.wcs.crpix[i - 1] = header.get(f"CRPIX{i}", 1.0)
-        w.wcs.crval[i - 1] = header.get(f"CRVAL{i}", 0.0)
-        w.wcs.ctype[i - 1] = header.get(f"CTYPE{i}", "")
-    cd = np.eye(naxis)
-    for i in range(1, naxis + 1):
-        for j in range(1, naxis + 1):
-            if f"CD{i}_{j}" in header:
-                cd[i - 1, j - 1] = header[f"CD{i}_{j}"]
-            elif f"PC{i}_{j}" in header and f"CDELT{j}" in header:
-                cd[i - 1, j - 1] = header[f"PC{i}_{j}"] * header[f"CDELT{j}"]
-            elif i == j and f"CDELT{i}" in header:
-                cd[i - 1, i - 1] = header[f"CDELT{i}"]
-    w.wcs.pc = cd
-    w.wcs.set()
-    return w
-
-
-def _spatial_wcs(header: fits.Header) -> WCS | None:
-    """2-D spatial WCS from an extension/primary header."""
-    try:
-        w = WCS(header)
-        if w.pixel_n_dim >= 2:
-            return w.sub(["longitude", "latitude"])
-    except Exception:
-        pass
-    try:
-        return _wcs_from_header(header, 2)
-    except Exception:
-        return None
-
 
 def _channels(header: fits.Header) -> tuple[list[str], list[str | None]]:
     """Channel names and units from ``C##``/``U##`` header cards."""
@@ -151,16 +87,6 @@ def _verify_local_file(path: Path) -> Path:
     return path
 
 
-def _open_fits(path: Path):
-    """fits.open with a clear message on truncation."""
-    try:
-        return fits.open(path)
-    except (OSError, EOFError, KeyError) as exc:
-        raise OSError(
-            f"failed to read FITS file {path}: {exc}. "
-            "The file may be truncated or incomplete; re-download it."
-        ) from exc
-
 # -- readers ----------------------------------------------------------------- #
 def read_cube(
     path: Path | str,
@@ -182,6 +108,9 @@ def read_cube(
         wcs = _wcs_from_header(prim, 3)
 
     meta = _meta(prim)
+    # MaNGA DRP WAVE is vacuum; tag the frame so science code can detect and
+    # (when needed) convert spectra from other surveys (MUSE is air).
+    meta.setdefault("wavelength_frame", "vacuum")
     # Registry is resolved lazily (downloaded once by MangaDataset when needed);
     # without a local par file, readers keep raw masks and treat any non-zero
     # bit as bad (mask_defs_or_none warns once).
