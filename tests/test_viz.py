@@ -1,6 +1,7 @@
 """Smoke tests for the viz layer (Agg backend)."""
 
 import numpy as np
+import pytest
 from astropy import units as u
 
 from udong.core.map import Map2D
@@ -21,6 +22,43 @@ def test_plot_map():
     m = Map2D(value=np.random.default_rng(0).normal(size=(8, 8)) * u.km / u.s)
     ax = plot_map(m)
     assert ax is not None
+
+
+def test_plot_map_scales():
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import LogNorm, Normalize, SymLogNorm
+
+    unit = u.Unit("1e-17 erg/(s cm2 AA)")
+    pos = Map2D(value=(np.abs(np.random.default_rng(1).normal(size=(8, 8))) + 0.01) * unit)
+    try:
+        ax = plot_map(pos, scale="log")
+        norm = ax.images[0].norm
+        assert isinstance(norm, LogNorm)
+        plt.close(ax.figure)
+
+        ax = plot_map(pos, scale="linear")
+        assert isinstance(ax.images[0].norm, Normalize)
+        plt.close(ax.figure)
+
+        bipolar = Map2D(value=np.linspace(-10, 10, 64).reshape(8, 8) * u.km / u.s)
+        ax = plot_map(bipolar, scale="symlog", linthresh=0.1)
+        assert isinstance(ax.images[0].norm, SymLogNorm)
+        plt.close(ax.figure)
+    finally:
+        plt.close("all")
+
+
+def test_plot_map_scale_errors():
+    import matplotlib.pyplot as plt
+
+    neg = Map2D(value=np.full((4, 4), -1.0) * u.km / u.s)
+    try:
+        with pytest.raises(ValueError):
+            plot_map(neg, scale="log")   # no positive data
+        with pytest.raises(ValueError):
+            plot_map(neg, scale="bogus")
+    finally:
+        plt.close("all")
 
 
 def test_plot_profile():
